@@ -1,0 +1,135 @@
+PROD环境ES集群
+
+一、集群各节点JDK环境部署
+1. 下载jdk包：需要orcal的jdk
+	# wget http://download.sihai.com/jdk1.8.0_221.tar -P /usr/local/
+
+2. 解压
+	# tar xf jdk1.8.0_221.tar
+
+3. 配置环境变量
+	# echo 'export JAVA_HOME="/usr/local/jdk1.8.0_221"' >> /etc/profile
+	# echo 'export PATH="$PATH:$JAVA_HOME/bin"' >> /etc/profile
+	# source /etc/profile
+	
+4. 验证安装
+	# java -version
+
+二、集群各节点安装elasticsearch
+1. 配置yum源
+	# cat /etc/yum.repos.d/elasticsearch.repo
+	[elasticsearch-7.x]
+	name=Elasticsearch repository for 7.x packages
+	baseurl=https://artifacts.elastic.co/packages/7.x/yum
+	gpgcheck=1
+	gpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch
+	enabled=1
+	autorefresh=1
+	type=rpm-md
+
+	
+2. 安装
+	# yum install -y elasticsearch
+
+3. 配置
+	a. 集群配置
+	# grep -vE "^#|^$" /etc/elasticsearch/elasticsearch.yml
+	# 集群名称
+	cluster.name: prod-es-cluster
+	# 节点名称(注意各节点配置不要一样)
+	node.name: prod-es01
+	# 数据存放目录
+	path.data: /var/lib/elasticsearch
+	# 日志输出目录
+	path.logs: /var/log/elasticsearch
+	# 监听网段
+	network.host: 0.0.0.0
+	# 端口
+	http.port: 9200
+	# 集群节点地址
+	discovery.seed_hosts: ["10.3.18.33", "10.3.18.34", "10.3.18.35"]
+	# 集群节点名称
+	cluster.initial_master_nodes: ["prod-es01", "prod-es02", "prod-es03"]
+	# 使用 header插件时需要新增以下两个参数:
+	http.cors.enabled: true
+	http.cors.allow-origin: "*"
+	
+	
+	b.将堆大小配置为主机内存的一半
+	# vim /etc/elasticsearch/jvm.options
+	-Xms4g
+	-Xmx4g
+
+	
+4. 启动
+	# systemctl start elasticsearch
+	
+5. 查看启动状态
+	# systemctl status elasticsearch
+
+6. 验证集群状态
+	# curl localhost:9200/_cat/nodes?v
+	ip         heap.percent ram.percent cpu load_1m load_5m load_15m node.role master name
+	10.3.18.35            7          77   5    0.29    0.11     0.08 dilm      -      prod-es03
+	10.3.18.33            9          77   4    0.06    0.04     0.05 dilm      -      prod-es01
+	10.3.18.34            9          77   6    0.12    0.06     0.06 dilm      *      prod-es02
+
+三、安装kibana
+1. 添加yum源
+	# cat /etc/yum.repos.d/kibana.repo
+	[kibana-7.x]
+	name=Kibana repository for 7.x packages
+	baseurl=https://artifacts.elastic.co/packages/7.x/yum
+	gpgcheck=1
+	gpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch
+	enabled=1
+	autorefresh=1
+	type=rpm-md
+	
+
+2. 安装
+	# yum install -y kibana
+	
+3. 配置
+	# grep -vE "^#|^$" /etc/kibana/kibana.yml
+	server.host: "0.0.0.0"
+	elasticsearch.hosts: ["http://10.3.18.37:9200"]
+	i18n.locale: "zh-CN“
+	
+4. 启动
+	# systemctl start kibana
+	
+5. 查看是否启动
+	# netstat -tunlp | grep 5601
+	
+6. 浏览器打开web界面验证，地址：http://ip:5601
+
+四、安装nginx代理kibana 并增加登录认证
+1. 安装 nginx
+	# yum install -y nginx
+
+2. 创建登录帐号与密码
+	# echo "kibadmin:`openssl passwd -apr1`" | sudo tee -a /etc/nginx/htpasswd.users 
+	按提输入两次密码，会在/etc/nginx/htpasswd.users文件生成帐号与加密密码
+	
+3. 配置nginx kibana
+	# cat /etc/nginx/conf.d/kibana.conf
+	server {
+	listen 80;
+	server_name kibana.uat.com;
+
+	auth_basic "Restricted Access";
+	auth_basic_user_file /etc/nginx/htpasswd.users;
+
+	location / {
+		proxy_pass http://localhost:5601;
+		proxy_http_version 1.1;
+		proxy_set_header Upgrade $http_upgrade;
+		proxy_set_header Connection 'upgrade';
+		proxy_set_header Host $host;
+		proxy_cache_bypass $http_upgrade;        
+		}
+	}
+
+4. 启动nginx
+	# systemctl start nginx
